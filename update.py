@@ -1,12 +1,29 @@
+
 """Auto-update Behesht Abzar products from Divar profile.
-Runs in GitHub Actions every 12h + on demand.
+Runs in GitHub Actions every hour + on demand.
 Profile: https://divar.ir/pro/bxdrxdtU
-Output: products.json + products.js (window.P = [...])
-v2: robust logging, anti-bot handling, never overwrites with empty list.
+Output: products.json + products.js (window.P = [...]) + last-check.txt
 """
 import json, re, sys
 
 PROFILE = "https://divar.ir/pro/bxdrxdtU"
+
+def write_heartbeat(status, count=""):
+    try:
+        from datetime import datetime, timezone, timedelta
+        tehran = timezone(timedelta(hours=3, minutes=30))
+        now_utc = datetime.now(timezone.utc)
+        now_thr = now_utc.astimezone(tehran)
+        txt = (
+            f"last check (Tehran): {now_thr:%Y-%m-%d %H:%M:%S}\n"
+            f"last check (UTC): {now_utc:%Y-%m-%d %H:%M:%S}\n"
+            f"status: {status}\n"
+            f"products: {count}\n"
+        )
+        open("last-check.txt", "w", encoding="utf-8").write(txt)
+        print("heartbeat: " + txt.replace("\n", " | "), flush=True)
+    except Exception as e:
+        print(f"heartbeat fail: {e}", flush=True)
 
 def guess_cat(title: str) -> str:
     t = title or ""
@@ -48,10 +65,10 @@ def main():
             except Exception:
                 pass
             b.close()
+            write_heartbeat("FAIL profile-load", 0)
             print("RESULT: FAIL profile-load", flush=True)
             sys.exit(1)
         pg.wait_for_timeout(5000)
-        # dismiss possible cookie / confirm dialogs by scrolling
         for _ in range(10):
             pg.evaluate("window.scrollBy(0,1200)")
             pg.wait_for_timeout(600)
@@ -80,6 +97,7 @@ def main():
             except Exception as e:
                 print(f"debug save fail: {e}", flush=True)
             b.close()
+            write_heartbeat("FAIL no-tokens", 0)
             print("RESULT: FAIL no-tokens (products NOT overwritten)", flush=True)
             sys.exit(1)
         for idx, tok in enumerate(tokens, 1):
@@ -129,7 +147,6 @@ def main():
                 print(f"[{idx}] {tok} ERR {str(e)[:150]}", flush=True)
         b.close()
 
-    # keep old categories + old pay links as fallback
     old_cat, old_pay = {}, {}
     try:
         old = json.load(open("products.json", encoding="utf-8"))
@@ -147,18 +164,19 @@ def main():
         pay = a["pay"] if ("open-platform" in a["pay"]) else (old_pay.get(tok) or a["pay"])
         prods.append({"id": i, "tok": tok, "t": a["t"], "c": c, "p": a["p"],
                       "imgs": a["imgs"], "divar": f"https://divar.ir/v/x/{tok}", "pay": pay})
-    # drop dead rows
     prods = [x for x in prods if x["t"] != x["tok"] or x["imgs"]]
     for i, x in enumerate(prods, 1): x["id"] = i
     print(f"valid products: {len(prods)}", flush=True)
     if len(prods) < 3:
+        write_heartbeat("FAIL too-few-products", len(prods))
         print("RESULT: FAIL too-few-products (products NOT overwritten)", flush=True)
         sys.exit(1)
     json.dump(prods, open("products.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     js = "window.P=" + json.dumps(prods, ensure_ascii=False) + ";\n"
     open("products.js", "w", encoding="utf-8").write(js)
+    write_heartbeat("OK", len(prods))
     print(f"DONE products:{len(prods)} js_bytes:{len(js.encode('utf-8'))}", flush=True)
 
 if __name__ == "__main__":
     sys.exit(main())
-    
+            
