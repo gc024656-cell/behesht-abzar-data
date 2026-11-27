@@ -1,4 +1,4 @@
-last check (Tehran): 2026-11-27 19:26:56
-last check (UTC): 2026-11-27 15:56:56
+last check (Tehran): 2026-11-27 20:31:39
+last check (UTC): 2026-11-27 17:01:39
 status: OK
 products: 23
