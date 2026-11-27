@@ -1,4 +1,4 @@
-last check (Tehran): 2026-11-28 00:22:38
-last check (UTC): 2026-11-27 20:52:38
-status: FAIL no-tokens
+last check (Tehran): 2026-11-28 01:22:12
+last check (UTC): 2026-11-27 21:52:12
+status: OK
 products: 23
