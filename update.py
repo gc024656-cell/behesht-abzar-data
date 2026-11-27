@@ -1,11 +1,9 @@
-
 """Auto-update Behesht Abzar products from Divar profile.
 Profile: https://divar.ir/pro/bxdrxdtU
 Output: products.json + products.js + last-check.txt (heartbeat)
-v4: scroll-until-stable, robust price, fallbacks to old data,
-    partial-load protection (never drops half the shop).
+v5: retry profile load 3x, retry each ad 2x, partial-load protection.
 """
-import json, re, sys
+import json, re, sys, time
 
 PROFILE = "https://divar.ir/pro/bxdrxdtU"
 
@@ -84,6 +82,20 @@ def ld_parse(ld_text):
         if title and price: break
     return title, price, img
 
+def goto_retry(pg, url, tries=3, timeout=120000):
+    last = None
+    for a in range(1, tries + 1):
+        try:
+            print(f"goto try {a}/{tries}: {url[:60]}", flush=True)
+            pg.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            return True
+        except Exception as e:
+            last = e
+            print(f"goto try {a} FAIL: {str(e)[:200]}", flush=True)
+            time.sleep(4)
+    print(f"goto ALL FAIL: {url}", flush=True)
+    return False
+
 def main():
     old_list, old_map = [], {}
     try:
@@ -92,7 +104,7 @@ def main():
             if "tok" in x: old_map[x["tok"]] = x
         print(f"old products: {len(old_list)}", flush=True)
     except Exception as e:
-        print(f"no old products.json: {e}", flush=True)
+        print(f"old products.json unreadable: {str(e)[:200]}", flush=True)
 
     from playwright.sync_api import sync_playwright
     tokens, ads = [], {}
@@ -104,13 +116,14 @@ def main():
                             locale="fa-IR")
         pg = ctx.new_page()
         print("profile...", flush=True)
-        try:
-            pg.goto(PROFILE, timeout=90000, wait_until="domcontentloaded")
-        except Exception as e:
-            print(f"PROFILE GOTO FAIL: {e}", flush=True)
+        if not goto_retry(pg, PROFILE, tries=3):
+            try:
+                open("debug.html", "w", encoding="utf-8").write(pg.content())
+            except Exception:
+                pass
             b.close()
             write_heartbeat("FAIL profile-load", len(old_list))
-            print("RESULT: FAIL profile-load", flush=True)
+            print("RESULT: FAIL profile-load (divar did not answer, retry later)", flush=True)
             sys.exit(1)
         pg.wait_for_timeout(6000)
         prev, stable = -1, 0
@@ -149,13 +162,20 @@ def main():
             sys.exit(1)
         for idx, tok in enumerate(tokens, 1):
             url = f"https://divar.ir/v/x/{tok}"
+            ok = goto_retry(pg, url, tries=2)
+            if not ok:
+                old = old_map.get(tok)
+                if old:
+                    ads[tok] = {"t": old.get("t", tok), "p": old.get("p", 0),
+                                "imgs": old.get("imgs", []), "pay": old.get("pay", url)}
+                    print(f"[{idx}/{len(tokens)}] {tok} kept-old (page fail)", flush=True)
+                continue
             try:
-                pg.goto(url, timeout=90000, wait_until="domcontentloaded")
                 pg.wait_for_timeout(2800)
                 for _ in range(3):
                     pg.evaluate("window.scrollBy(0,800)")
                     pg.wait_for_timeout(350)
-                ld = pg.evaluate("""()=>{const el=document.querySelector('script[type=\"application/ld+json\"]');return el?el.textContent:\"\"}""")
+                ld = pg.evaluate("""()=>{const el=document.querySelector('script[type="application/ld+json"]');return el?el.textContent:""}""")
                 html = ""
                 try: html = pg.content()
                 except Exception: pass
@@ -245,4 +265,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-            
