@@ -1,7 +1,8 @@
 """Auto-update Behesht Abzar products from Divar profile.
 Profile: https://divar.ir/pro/bxdrxdtU
-Output: products.json + products.js + last-check.txt (heartbeat)
-v5: retry profile load 3x, retry each ad 2x, partial-load protection.
+Output: products.json + products.js + last-check.txt
+v6: NEVER shrink on partial load. Merge old+new.
+    Missing old items are kept UNLESS their ad page is proven dead.
 """
 import json, re, sys, time
 
@@ -83,18 +84,35 @@ def ld_parse(ld_text):
     return title, price, img
 
 def goto_retry(pg, url, tries=3, timeout=120000):
-    last = None
     for a in range(1, tries + 1):
         try:
             print(f"goto try {a}/{tries}: {url[:60]}", flush=True)
             pg.goto(url, timeout=timeout, wait_until="domcontentloaded")
             return True
         except Exception as e:
-            last = e
             print(f"goto try {a} FAIL: {str(e)[:200]}", flush=True)
             time.sleep(4)
     print(f"goto ALL FAIL: {url}", flush=True)
     return False
+
+DEAD_PHRASES = ["حذف شده", "یافت نشد", "وجود ندارد", "منقضی شده", "not found", "404"]
+
+def is_ad_dead(pg):
+    try:
+        txt = pg.evaluate("()=>document.body.innerText.slice(0,4000)")
+        t = txt or ""
+        for ph in DEAD_PHRASES:
+            if ph in t:
+                return True
+        try:
+            title = pg.title() or ""
+            if "404" in title or "یافت نشد" in title:
+                return True
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
 
 def main():
     old_list, old_map = [], {}
@@ -227,7 +245,27 @@ def main():
                 if old:
                     ads[tok] = {"t": old.get("t", tok), "p": old.get("p", 0),
                                 "imgs": old.get("imgs", []), "pay": old.get("pay", url)}
+        # verify missing old ads: keep unless proven dead
+        missing = [t for t in old_map if t not in tokens]
+        print(f"missing old to verify: {len(missing)}", flush=True)
+        dead = set()
+        for tok in missing:
+            url = f"https://divar.ir/v/x/{tok}"
+            ok = goto_retry(pg, url, tries=2)
+            if not ok:
+                print(f"verify {tok}: page fail -> KEEP", flush=True)
+                continue
+            try:
+                pg.wait_for_timeout(2500)
+                if is_ad_dead(pg):
+                    print(f"verify {tok}: DEAD -> remove", flush=True)
+                    dead.add(tok)
+                else:
+                    print(f"verify {tok}: alive -> KEEP", flush=True)
+            except Exception as e:
+                print(f"verify {tok} ERR -> KEEP: {str(e)[:120]}", flush=True)
         b.close()
+        kept_dead = dead
 
     prods = []
     for i, tok in enumerate(tokens, 1):
@@ -240,22 +278,28 @@ def main():
             else:
                 continue
         c = old_map.get(tok, {}).get("c") or guess_cat(a["t"])
-        prods.append({"id": i, "tok": tok, "t": a["t"], "c": c, "p": a["p"],
+        prods.append({"id": 0, "tok": tok, "t": a["t"], "c": c, "p": a["p"],
                       "imgs": a["imgs"], "divar": f"https://divar.ir/v/x/{tok}", "pay": a["pay"]})
+    # always merge missing old (except proven dead)
+    for ot in old_list:
+        tok = ot.get("tok")
+        if tok and tok not in tokens and tok not in kept_dead:
+            prods.append(ot)
+            print(f"merged old {tok}", flush=True)
+    # dedupe by tok keeping first
+    seen_tok = set()
+    uniq = []
+    for x in prods:
+        if x["tok"] not in seen_tok:
+            seen_tok.add(x["tok"])
+            uniq.append(x)
+    prods = uniq
     prods = [x for x in prods if x["t"] != x["tok"] or x["imgs"]]
-    print(f"valid fresh: {len(prods)} / old: {len(old_list)}", flush=True)
+    print(f"valid fresh: {len(tokens)} + merged old = final {len(prods)} / old {len(old_list)} / dead {len(kept_dead)}", flush=True)
     if len(prods) < 3:
         write_heartbeat("FAIL too-few", len(old_list))
         print("RESULT: FAIL too-few (NOT overwritten)", flush=True)
         sys.exit(1)
-    if old_list and len(prods) < len(old_list):
-        new_toks = set(x["tok"] for x in prods)
-        if len(new_toks) < len(old_map) * 0.85:
-            print(f"PARTIAL LOAD: fresh {len(new_toks)} < old {len(old_map)}, keeping missing old items", flush=True)
-            for ot in old_list:
-                if ot.get("tok") not in new_toks:
-                    prods.append(ot)
-                    print(f"kept old {ot.get('tok')}", flush=True)
     for i, x in enumerate(prods, 1): x["id"] = i
     print(f"final products: {len(prods)}", flush=True)
     json.dump(prods, open("products.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
