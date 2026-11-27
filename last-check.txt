@@ -1,4 +1,4 @@
-last check (Tehran): 2026-11-27 03:18:51
-last check (UTC): 2026-11-26 23:48:51
-status: OK
-products: 13
+last check (Tehran): 2026-11-27 03:34:41
+last check (UTC): 2026-11-27 00:04:41
+status: FAIL profile-load
+products: 0
