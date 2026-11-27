@@ -22,11 +22,8 @@ jobs:
           python-version: '3.12'
 
       - run: python -m pip install --upgrade pip
-
       - run: pip install -r requirements.txt
-
       - run: python -m playwright install --with-deps chromium
-
       - run: python update.py
 
       - uses: actions/upload-artifact@v4
@@ -36,11 +33,17 @@ jobs:
           path: debug.html
           if-no-files-found: ignore
 
+      - name: post new products to Rubika
+        if: always()
+        env:
+          RUBIKA_BOT_TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
+          RUBIKA_CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
+        run: python rubika_post.py
+
       - if: always()
         run: |
           git config user.name "behesht-bot"
           git config user.email "bot@example.com"
-          git add products.js products.json last-check.txt
+          git add products.js products.json last-check.txt posted_rubika.json
           git diff --quiet --cached || git commit -m "auto update products"
           git push
-          
